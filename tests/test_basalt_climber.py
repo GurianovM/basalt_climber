@@ -1,7 +1,9 @@
-"""Тесты для шестилапого скалолаза «Базальт» (SPEC.md v0.1, TEST_CASES.md v0.1).
+"""Тесты для шестилапого скалолаза «Базальт» (SPEC.md v0.2, TEST_CASES.md v0.2).
 
 Запуск из корня репозитория:
+
     python -m unittest discover -s tests -v
+
 Модульные тесты построены по паттерну AAA (Arrange-Act-Assert),
 сценарные — по Given-When-Then через тестовые обёртки Pilot, Rockfall и Workshop.
 Каждый тест содержит ID своего тест-кейса в имени и в docstring.
@@ -20,6 +22,8 @@ from basalt_climber import (
 )
 
 PLACES = 6
+NAN = float("nan")
+INF = float("inf")
 
 
 def make_basalt(**overrides):
@@ -49,8 +53,6 @@ def snapshot(basalt):
         basalt.working_legs,
     )
 
-
-# Сценарии
 
 
 class Pilot:
@@ -82,7 +84,7 @@ class Pilot:
 
 
 class Rockfall:
-    """Обвал: выводит из строя одну лапу."""
+    """Обвал: событие внешнего мира, выводит из строя одну лапу."""
 
     def обрушить(self, basalt):
         basalt.damage_leg()
@@ -95,7 +97,6 @@ class Workshop:
         basalt.repair_legs()
 
 
-# Модульные тесты (AAA)
 
 
 class TestConstructor(unittest.TestCase):
@@ -128,7 +129,6 @@ class TestConstructor(unittest.TestCase):
         """TC-02. Пустое имя или имя из пробелов → ValueError."""
         for bad_name in ("", "   "):
             with self.subTest(name=bad_name):
-                # Act / Assert
                 with self.assertRaises(ValueError):
                     make_basalt(name=bad_name)
 
@@ -162,6 +162,7 @@ class TestConstructor(unittest.TestCase):
             {"mass_kg": True},
             {"max_speed_kmh": None},
             {"energy": "50"},
+            {"name": "", "mass_kg": "300"},
         ]
         for overrides in cases:
             with self.subTest(overrides=overrides):
@@ -300,6 +301,15 @@ class TestMove(unittest.TestCase):
         self.assertAlmostEqual(ctx.exception.available, 10.0, places=PLACES)
         self.assertEqual(snapshot(basalt), before)
 
+        poor = make_basalt(energy=0.5)
+        before = snapshot(poor)
+        self.assertIs(poor.can_walk, True)
+        with self.assertRaises(BasaltNoStrength) as ctx:
+            poor.move(1, "rock")
+        self.assertAlmostEqual(ctx.exception.required, 1.0, places=PLACES)
+        self.assertAlmostEqual(ctx.exception.available, 0.5, places=PLACES)
+        self.assertEqual(snapshot(poor), before)
+
     def test_tc15_move_spends_all_energy_exactly(self):
         """TC-15. Расход ровно равен запасу — перемещение разрешено."""
         basalt = make_basalt(energy=100)
@@ -430,6 +440,15 @@ class TestMove(unittest.TestCase):
             with self.assertRaises(TypeError):
                 basalt.move("1", "space")
 
+        with self.subTest(case="значение раннего + тип позднего аргумента"):
+            basalt = make_basalt()
+            before = snapshot(basalt)
+            for args in ((0, 123), (-5, None)):
+                with self.subTest(args=args):
+                    with self.assertRaises(TypeError):
+                        basalt.move(*args)
+            self.assertEqual(snapshot(basalt), before)
+
 
 class TestCalculateEnergy(unittest.TestCase):
     """SPEC 3.4.3."""
@@ -473,6 +492,10 @@ class TestCalculateEnergy(unittest.TestCase):
                     basalt.calculate_energy(*args)
         with self.assertRaises(TypeError):
             basalt.calculate_energy("1", "rock")
+        before = snapshot(basalt)
+        with self.assertRaises(TypeError):
+            basalt.calculate_energy(0, 123)
+        self.assertEqual(snapshot(basalt), before)
 
 
 class TestCanOvercome(unittest.TestCase):
@@ -645,7 +668,7 @@ class TestLegs(unittest.TestCase):
         with self.subTest(case="после повреждений на земле"):
             basalt = make_basalt()
             damage(basalt, 3)
-
+ 
             basalt.repair_legs()
 
             self.assertEqual(basalt.working_legs, 6)
@@ -710,11 +733,47 @@ class TestStatusAndExceptions(unittest.TestCase):
         self.assertAlmostEqual(error.required, 6.0, places=PLACES)
         self.assertAlmostEqual(error.available, 2.0, places=PLACES)
 
-# Сценарные тесты
+
+class TestNonFinite(unittest.TestCase):
+    """SPEC 3.0 (правила 3 и 7), 6.2."""
+
+    def test_tc35_non_finite_numbers_raise(self):
+        """TC-35. NaN и ±∞ отвергаются как значения; тип проверяется раньше."""
+        special = (NAN, INF, -INF)
+
+        for param in ("mass_kg", "max_speed_kmh", "energy"):
+            for value in special:
+                with self.subTest(param=param, value=value):
+                    with self.assertRaises(ValueError):
+                        make_basalt(**{param: value})
+
+        basalt = make_basalt()
+        before = snapshot(basalt)
+        for value in special:
+            calls = {
+                "move": lambda v=value: basalt.move(v, "rock"),
+                "calculate_energy":
+                    lambda v=value: basalt.calculate_energy(v, "rock"),
+                "refuel": lambda v=value: basalt.refuel(v),
+            }
+            for method, call in calls.items():
+                with self.subTest(method=method, value=value):
+                    with self.assertRaises(ValueError):
+                        call()
+        self.assertEqual(snapshot(basalt), before)
+
+        with self.subTest(case="значение раньше домена"):
+            with self.assertRaises(ValueError):
+                basalt.move(NAN, "water")
+        with self.subTest(case="тип раньше значения"):
+            with self.assertRaises(TypeError):
+                basalt.move(NAN, 123)
+        self.assertEqual(snapshot(basalt), before)
+
 
 
 class TestScenarios(unittest.TestCase):
-    """SPEC 4.2"""
+    """SPEC 4.2."""
 
     def test_tc30_mountain_shelter_delivery(self):
         """TC-30. Сценарий 5 «Доставка груза в горный приют»."""
