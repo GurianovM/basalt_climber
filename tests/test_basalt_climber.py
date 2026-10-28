@@ -11,7 +11,7 @@
 
 import unittest
 
-from basalt_climber import (
+from vehicle import (
     BasaltCannotSwim,
     BasaltClimber,
     BasaltError,
